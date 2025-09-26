@@ -47,3 +47,48 @@ jobs:
         if: steps.restore-clang.outputs.cache-hit != 'true'
         id: cache-clang-save
         uses: actions/cache/save@v4
+        with:
+          path: /home/runner/r547379
+          key: clang-r547379
+
+      # 🔥 Disable kernel module signature verification
+      - name: Disable kernel module signature verification
+        run: |
+          sed -i '/CONFIG_MODULE_SIG/d' arch/arm64/configs/raphael_defconfig
+          echo "CONFIG_MODULE_SIG=n" >> arch/arm64/configs/raphael_defconfig
+          echo "CONFIG_MODULE_SIG_FORCE=n" >> arch/arm64/configs/raphael_defconfig
+          echo "CONFIG_MODULE_SIG_ALL=n" >> arch/arm64/configs/raphael_defconfig
+
+      - name: Build the kernel with `ccache`
+        run: |
+          export CLANG_PATH=$HOME/r547379/bin
+          export PATH=${CLANG_PATH}:${PATH}
+          
+          make LLVM=1 LLVM_IAS=1 CC="ccache clang" raphael_defconfig
+          make LLVM=1 LLVM_IAS=1 CC="ccache clang" -j$(grep -c ^processor /proc/cpuinfo)
+
+          ccache --show-stats
+          ccache --show-config
+        shell: bash
+
+      - name: Repack Kernel Artifacts
+        run: |
+          git clone --depth=1 https://github.com/SOVIET-ANDROID/AnyKernel3.git $HOME/AnyKernel3
+          cp out/arch/arm64/boot/Image.gz-dtb $HOME/AnyKernel3/
+          cp out/arch/arm64/boot/dtbo.img $HOME/AnyKernel3/
+
+          BRANCH=$(echo "${GITHUB_REF#refs/heads/}" | sed 's|/|-|g')
+          COMMIT_HASH=$(echo "$GITHUB_SHA" | cut -c1-6)
+          ZIP_NAME="${BRANCH}-${COMMIT_HASH}.zip"
+          echo $ZIP_NAME
+          echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
+
+          mv "$HOME/AnyKernel3" "$GITHUB_WORKSPACE/AnyKernel3"
+          ls -lah $GITHUB_WORKSPACE/AnyKernel3
+        shell: bash
+
+      - name: Upload Kernel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ github.workspace }}/AnyKernel3/
