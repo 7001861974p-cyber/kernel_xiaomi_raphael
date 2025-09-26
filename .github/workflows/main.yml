@@ -92,3 +92,9 @@ jobs:
         with:
           name: ${{ env.ZIP_NAME }}
           path: ${{ github.workspace }}/AnyKernel3/
+
+      - name: Upload Kernel Config
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-Config
+          path: out/.config
