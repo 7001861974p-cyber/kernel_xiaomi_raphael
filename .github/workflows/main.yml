@@ -18,18 +18,95 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison flex libssl-dev make \
-              gcc clang llvm lld git zip unzip wget curl build-essential \
-              python3 python3-pip ccache kmod
+            gcc clang llvm lld git zip unzip wget curl build-essential \
+            python3 python3-pip ccache kmod
 
       - name: Setup Toolchain
         run: |
           mkdir -p ~/toolchains
           cd ~/toolchains
-          # GCC 4.9 for cross-compiling
           git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 --depth=1 gcc64
-          # Clang 14.0.6
           wget https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.6/clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-20.04.tar.xz
           tar -xf clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-20.04.tar.xz
           mv clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-20.04 clang
 
-      - name: Detect Kernel Vers
+      - name: Detect Kernel Version
+        id: kver
+        run: |
+          cd $GITHUB_WORKSPACE
+          KERNEL_VER=$(make kernelversion)
+          echo "kernel_ver=$KERNEL_VER" >> $GITHUB_OUTPUT
+
+      - name: Add KernelSU
+        run: |
+          cd $GITHUB_WORKSPACE
+          git clone https://github.com/tiann/KernelSU ksu
+          cd ksu
+          git submodule update --init --recursive
+          if [ -d "next/patches/${{ steps.kver.outputs.kernel_ver }}" ]; then
+            git am next/patches/${{ steps.kver.outputs.kernel_ver }}/*
+          else
+            echo "⚠️ No matching KernelSU patch found for kernel version ${{ steps.kver.outputs.kernel_ver }}, applying core patch"
+            patch -p1 < next/kernel/ksu.diff || true
+          fi
+
+      - name: Build Kernel
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export PATH=$HOME/toolchains/gcc64/bin:$HOME/toolchains/clang/bin:$PATH
+          export CROSS_COMPILE=aarch64-linux-android-
+          export CC=clang
+
+          cd $GITHUB_WORKSPACE
+          make raphael_defconfig
+
+          # Force-enable module configs
+          if [ -f ./scripts/config ]; then
+            ./scripts/config --set-val CONFIG_MODULES y || true
+            ./scripts/config --set-val CONFIG_MODULE_UNLOAD y || true
+            ./scripts/config --set-val CONFIG_MODVERSIONS y || true
+            ./scripts/config --disable CONFIG_MODULE_SIG || true
+            ./scripts/config --disable CONFIG_MODULE_SIG_ALL || true
+            ./scripts/config --set-str CONFIG_MODULE_SIG_KEY "" || true
+            ./scripts/config --disable CONFIG_IMA || true
+            ./scripts/config --disable CONFIG_IMA_APPRAISE || true
+            ./scripts/config --disable CONFIG_LOCK_DOWN_LSM || true
+          else
+            sed -i 's/# CONFIG_MODULES is not set/CONFIG_MODULES=y/' .config || true
+            grep -q "CONFIG_MODULES=y" .config || echo "CONFIG_MODULES=y" >> .config
+            sed -i 's/# CONFIG_MODULE_UNLOAD is not set/CONFIG_MODULE_UNLOAD=y/' .config || true
+            grep -q "CONFIG_MODULE_UNLOAD=y" .config || echo "CONFIG_MODULE_UNLOAD=y" >> .config
+            sed -i 's/# CONFIG_MODVERSIONS is not set/CONFIG_MODVERSIONS=y/' .config || true
+            grep -q "CONFIG_MODVERSIONS=y" .config || echo "CONFIG_MODVERSIONS=y" >> .config
+            sed -i 's/CONFIG_MODULE_SIG=y/# CONFIG_MODULE_SIG is not set/' .config || true
+            sed -i 's/CONFIG_MODULE_SIG_ALL=y/# CONFIG_MODULE_SIG_ALL is not set/' .config || true
+            sed -i 's/CONFIG_IMA=y/# CONFIG_IMA is not set/' .config || true
+            sed -i 's/CONFIG_IMA_APPRAISE=y/# CONFIG_IMA_APPRAISE is not set/' .config || true
+            sed -i 's/CONFIG_LOCK_DOWN_LSM=y/# CONFIG_LOCK_DOWN_LSM is not set/' .config || true
+          fi
+
+          # Finalize config
+          make olddefconfig
+
+          # Verify modules are enabled
+          grep -q "CONFIG_MODULES=y" .config || { echo "❌ CONFIG_MODULES not enabled!"; exit 1; }
+
+          # Build kernel + modules
+          make -j$(nproc)
+          make -j$(nproc) modules
+          make INSTALL_MOD_PATH=output modules_install || true
+
+      - name: Pack into AnyKernel3 ZIP
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3.git AnyKernel
+          cp arch/arm64/boot/Image.gz-dtb AnyKernel/
+          cp -r output/lib/modules AnyKernel/modules
+          cd AnyKernel
+          zip -r9 ../kernel-build.zip *
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build
+          path: kernel-build.zip
