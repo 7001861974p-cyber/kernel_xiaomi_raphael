@@ -26,7 +26,7 @@ jobs:
             kernel-build-cache
           max-size: '10G'
 
-      - name: Restore toolchain cache
+      - name: Restore Clang cache
         id: restore-clang
         uses: actions/cache/restore@v4
         with:
@@ -37,7 +37,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential ccache curl flex libelf-dev libncurses-dev libssl-dev unzip zip wget libarchive-tools
-          
           ccache --show-stats
 
       - name: Deploy Clang
@@ -45,7 +44,7 @@ jobs:
         run: |
           git clone https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r547379.git /home/runner/r547379 --depth=1
 
-      - name: Save clang
+      - name: Save Clang
         if: steps.restore-clang.outputs.cache-hit != 'true'
         id: cache-clang-save
         uses: actions/cache/save@v4
@@ -58,18 +57,23 @@ jobs:
           export CLANG_PATH=$HOME/r547379/bin
           export PATH=${CLANG_PATH}:${PATH}
 
-          # Ensure output directory is clean
+          # Clean output directory
           make O=out mrproper
 
-          # Apply defconfig
+          # Apply device defconfig
           make O=out raphael_defconfig
 
-          # Disable module signature verification
+          # Disable all module signature verification
           scripts/config --file out/.config --disable MODULE_SIG
           scripts/config --file out/.config --disable MODULE_SIG_ALL
           scripts/config --file out/.config --disable MODULE_SIG_FORCE
 
-          # Compile kernel using ccache
+          # Re-check the config
+          grep CONFIG_MODULE_SIG out/.config || true
+          grep CONFIG_MODULE_SIG_ALL out/.config || true
+          grep CONFIG_MODULE_SIG_FORCE out/.config || true
+
+          # Compile the kernel
           make O=out LLVM=1 LLVM_IAS=1 CC="ccache clang" -j$(nproc)
 
           # Show ccache stats
@@ -81,7 +85,7 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/SOVIET-ANDROID/AnyKernel3.git $HOME/AnyKernel3
           
-          # Copy kernel artifacts
+          # Copy kernel images
           cp out/arch/arm64/boot/Image.gz-dtb $HOME/AnyKernel3/
           cp out/arch/arm64/boot/dtbo.img $HOME/AnyKernel3/
 
@@ -89,7 +93,6 @@ jobs:
           BRANCH=$(echo "${GITHUB_REF#refs/heads/}" | sed 's|/|-|g')
           COMMIT_HASH=$(echo "$GITHUB_SHA" | cut -c1-6)
           ZIP_NAME="${BRANCH}-${COMMIT_HASH}.zip"
-          echo $ZIP_NAME
           echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
 
           # Move AnyKernel3 to workspace
