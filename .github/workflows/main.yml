@@ -26,9 +26,9 @@ jobs:
           mkdir -p ~/toolchains
           cd ~/toolchains
           git clone https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 --depth=1 gcc64
-          wget https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.6/clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-20.04.tar.xz
-          tar -xf clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-20.04.tar.xz
-          mv clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-20.04 clang
+          wget https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.6/clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+          tar -xf clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+          mv clang+llvm-14.0.6-x86_64-linux-gnu-ubuntu-18.04 clang
 
       - name: Detect Kernel Version
         id: kver
@@ -92,21 +92,4 @@ jobs:
           # Verify modules are enabled
           grep -q "CONFIG_MODULES=y" .config || { echo "❌ CONFIG_MODULES not enabled!"; exit 1; }
 
-          # Build kernel + modules
-          make -j$(nproc)
-          make -j$(nproc) modules
-          make INSTALL_MOD_PATH=output modules_install || true
-
-      - name: Pack into AnyKernel3 ZIP
-        run: |
-          git clone https://github.com/osm0sis/AnyKernel3.git AnyKernel
-          cp arch/arm64/boot/Image.gz-dtb AnyKernel/
-          cp -r output/lib/modules AnyKernel/modules
-          cd AnyKernel
-          zip -r9 ../kernel-build.zip *
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-build
-          path: kernel-build.zip
+          # Build kernel + modul
