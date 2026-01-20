@@ -1,4 +1,4 @@
-name: Continues testing
+name: Continuous Kernel Build & Release
 
 on:
   push:
@@ -46,64 +46,58 @@ jobs:
 
       - name: Save Clang
         if: steps.restore-clang.outputs.cache-hit != 'true'
-        id: cache-clang-save
         uses: actions/cache/save@v4
         with:
           path: /home/runner/r547379
           key: clang-r547379
 
-      - name: Build the kernel with `ccache` (Unsigned, O=out)
+      - name: Build the kernel with ccache (Unsigned, O=out)
         run: |
           export CLANG_PATH=$HOME/r547379/bin
           export PATH=${CLANG_PATH}:${PATH}
 
-          # Clean output directory
           make O=out mrproper
-
-          # Apply device defconfig
           make O=out raphael_defconfig
 
-          # Disable all module signature verification
+          # Disable module signature verification
           scripts/config --file out/.config --disable MODULE_SIG
           scripts/config --file out/.config --disable MODULE_SIG_ALL
           scripts/config --file out/.config --disable MODULE_SIG_FORCE
 
-          # Re-check the config
-          grep CONFIG_MODULE_SIG out/.config || true
-          grep CONFIG_MODULE_SIG_ALL out/.config || true
-          grep CONFIG_MODULE_SIG_FORCE out/.config || true
+          # Sync config
+          make O=out olddefconfig
 
-          # Compile the kernel
+          # Build
           make O=out LLVM=1 LLVM_IAS=1 CC="ccache clang" -j$(nproc)
 
-          # Show ccache stats
           ccache --show-stats
-          ccache --show-config
-        shell: bash
 
-      - name: Repack Kernel Artifacts
+      - name: Repack Kernel with AnyKernel3
         run: |
           git clone --depth=1 https://github.com/SOVIET-ANDROID/AnyKernel3.git $HOME/AnyKernel3
-          
-          # Copy kernel images
-          cp out/arch/arm64/boot/Image.gz-dtb $HOME/AnyKernel3/
-          cp out/arch/arm64/boot/dtbo.img $HOME/AnyKernel3/
 
-          # Generate dynamic ZIP name
+          # Copy kernel images (safe way)
+          cp out/arch/arm64/boot/Image* $HOME/AnyKernel3/ || true
+          cp out/arch/arm64/boot/dtbo.img $HOME/AnyKernel3/ || true
+
+          # Generate ZIP name
           BRANCH=$(echo "${GITHUB_REF#refs/heads/}" | sed 's|/|-|g')
           COMMIT_HASH=$(echo "$GITHUB_SHA" | cut -c1-6)
           ZIP_NAME="${BRANCH}-${COMMIT_HASH}.zip"
           echo "ZIP_NAME=${ZIP_NAME}" >> $GITHUB_ENV
 
-          # Move AnyKernel3 to workspace
-          mv "$HOME/AnyKernel3" "$GITHUB_WORKSPACE/AnyKernel3"
+          # Make flashable zip
+          cd $HOME/AnyKernel3
+          zip -r "$GITHUB_WORKSPACE/$ZIP_NAME" *
 
-          # Verify contents
-          ls -lah $GITHUB_WORKSPACE/AnyKernel3
-        shell: bash
+          ls -lah $GITHUB_WORKSPACE
 
-      - name: Upload Kernel Artifact
-        uses: actions/upload-artifact@v4
+      - name: Create GitHub Release and Upload ZIP
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
         with:
-          name: ${{ env.ZIP_NAME }}
-          path: ${{ github.workspace }}/AnyKernel3/
+          tag_name: build-${{ github.run_number }}
+          name: Kernel Build ${{ github.run_number }}
+          files: ${{ github.workspace }}/${{ env.ZIP_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
